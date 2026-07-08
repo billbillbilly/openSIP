@@ -1,0 +1,87 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openSIP"
+version = "0.1.0"
+description = "Retrieve, evaluate, filter, and export geotagged sound-image pairs."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ["soundscape", "street-view", "mapillary", "flickr", "freesound", "aporee", "imagebind"]
+authors = [{ name = "Xiaohao Yang", email = "xiaohaoy111@gmail.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+dependencies = [
+    "pandas>=2.0",
+    "geopandas>=0.14",
+    "numpy>=1.24",
+    "Pillow>=10.0",
+    "opencv-python>=4.8",
+    "matplotlib>=3.7",
+    "requests>=2.31",
+    "tqdm>=4.66",
+    "pyproj>=3.6",
+    "shapely>=2.0",
+    "mercantile>=1.2",
+    "pydub>=0.25",
+    "soundfile>=0.12",
+    "duckdb>=0.10",
+    "networkx>=3.0",
+    "soundaqnet",
+    "torch>=2.0",
+    "torchaudio>=2.0",
+    "torchvision>=0.15",
+    "einops>=0.6",
+    "timm>=0.9",
+    "notebook>=7.6.0",
+]
+
+[project.optional-dependencies]
+placepulse = [
+    "huggingface_hub>=0.20",
+]
+
+[project.urls]
+Homepage = "https://github.com/billbillbilly/openSIP"
+Repository = "https://github.com/billbillbilly/openSIP"
+Issues = "https://github.com/billbillbilly/openSIP/issues"
+
+[tool.setuptools.packages.find]
+include = ["opensip*"]
+exclude = ["tests*", "docs*"]
+
+[tool.setuptools.package-data]
+opensip = [
+    "imagebind/bpe/*.gz",
+    "models/*.onnx",
+]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+ignore = ["E501", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
+"__init__.py" = ["F401"]
+"opensip/dataset.py" = ["F403", "F405", "E402"]
+"opensip/utils/building.py" = ["F403", "F405"]

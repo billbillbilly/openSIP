@@ -1,0 +1,291 @@
+# openSIP
+
+```angular2html
+=====================================================
+  ___   ____    ___  _ __         ____   ___   ____
+ / _ \ |  _ \  / _ \|  _ \   __  / ___| |_ _| |  _ \
+| (_) || |_) ||  __/| | | | |__| \___ \  | |  | |_) |
+ \___/ |  __/  \___||_| |_|      |____/ |___| |  __/
+       |_|                                    |_|
++++++++++++++++++++++++++++++++++++++++++++++++++++++
+      o p e n   S o u n d - I m a g e   P a i r
+=====================================================
+
+openSIP retrieves geotagged sound-image pairs and evaluates or filters them for
+soundscape and street-level urban research workflows. The simplest workflow uses
+one `AudioImagePairDataset` object for collection, pairing, scoring, filtering,
+and export.
+```
+
+## Features
+
+- Retrieve geotagged audio from Freesound or Radio Aporee.
+- Retrieve geotagged street-view images from Mapillary or Google Street View.
+- Retrieve geotagged photos from Flickr.
+- Build candidate audio-image pair tables by shared location and capture time.
+- Score embedding similarity with vendored ImageBind support.
+- Score semantic event-rank agreement with NDCG@k, MRR, and Spearman rho,
+  optionally inferring audio event ranks with SoundAQnet and image event ranks
+  with zero-shot ImageBind.
+- Score affective-quality agreement with RMSE and Pearson correlation.
+- Filter by similarity, sub-clip count, and top-k images per audio clip.
+- Export metadata and optional media files.
+- Save and load resumable workflow state.
+
+## Installation
+
+```sh
+pip install openSIP
+```
+
+The default installation includes the full core workflow: data collection,
+audio handling, ImageBind embedding similarity, SoundAQnet semantic/AQ
+inference, Overture/DuckDB outdoor filtering, and graph export.
+
+PlacePulse image AQ is the only optional installation group. Install it when
+you want openSIP to download and run the built-in Hugging Face PlacePulse
+checkpoints:
+
+```sh
+pip install "openSIP[placepulse]"
+```
+
+For development:
+
+```sh
+python -m pip install -e .
+python -m pip install pytest ruff build twine
+python -m pytest
+```
+
+## Quick start
+
+```python
+from opensip import AudioImagePairDataset
+
+apd = AudioImagePairDataset()
+apd.get_sound_from_location(bbox=BBOX, source="aporee", slice_duration=30)
+apd.get_svi_from_locations(source="google", key=GOOGLE_STREETVIEW_KEY)
+
+apd.build_pairs(image_source="svi")
+apd.compute_embedding_similarity(
+    output_dir="pairs_media",
+    audio_strategy="sample",
+    max_image_edge=1024,
+)
+apd.filter_pairs_by_similarity(min_similarity=0.15, top_k_per_audio=1)
+apd.export("pairs", data=True)
+```
+
+The final pair table can be materialized with a stable edge schema:
+
+```python
+final_pairs = apd.finalize_pairs()
+apd.export_final_dataframe("pairs/final_pairs.csv")
+```
+
+Each row is one edge from an audio sub-clip to an image. The stable columns
+include `pair_id`, `audio_node_id`, `image_node_id`, audio/image metadata,
+`distance_m`, `time_diff_days`, `embedding_similarity`,
+`semantic_similarity`, and AQ fields. AQ similarity is not collapsed into a
+single meaning: openSIP keeps `aq_similarity_type` plus typed columns such as
+`aq_similarity_direct`, `aq_similarity_event_rank`, and
+`aq_similarity_placepulse` when those methods have been used.
+
+For graph analysis or visualization, build a bipartite graph where audio
+sub-clips and images are nodes and pair rows are edges:
+
+```python
+graph = apd.to_graph()
+apd.export_graph("pairs/pair_graph.graphml")
+fig, ax = apd.plot_pair_graph(label_edges=True)
+```
+
+Graph edges carry distance, time difference, embedding similarity, semantic
+similarity, and the typed AQ similarity columns, so one audio sub-clip connected
+to multiple street-view/Flickr images remains visible.
+
+A complete runnable notebook is available at
+[`examples/full_workflow_sound_image_pairs_to_graph.ipynb`](examples/full_workflow_sound_image_pairs_to_graph.ipynb).
+It runs offline with synthetic metadata by default and includes guarded cells
+for live collection and model inference.
+
+ImageBind uses 2-second audio windows. openSIP handles longer recordings by
+default with `audio_strategy="sample"`, which lets ImageBind sample
+`clips_per_audio` windows from the candidate audio segment and average them
+internally. For fuller temporal coverage, use `audio_strategy="exhaustive"` to
+split the whole segment into consecutive `sub_clip_sec` windows and average all
+embeddings. Images are pre-resized with `max_image_edge` before ImageBind's
+224-pixel transform, so large street-view panoramas and Flickr photos do not
+need to be decoded at full size.
+
+```python
+# Fast large-scale scoring
+apd.compute_embedding_similarity(audio_strategy="sample", clips_per_audio=3)
+
+# Slower but covers the full candidate audio segment
+apd.compute_embedding_similarity(audio_strategy="exhaustive", sub_clip_sec=2.0)
+```
+
+For poster-style multi-level evaluation, attach or pass semantic event rankings
+and AQ vectors after pairs are built:
+
+```python
+apd.compute_semantic_similarity(
+    # audio_events can be omitted; SoundAQnet is part of the core install
+    # image_events can be omitted; openSIP ranks the fixed SoundAQnet
+    # event labels from images with zero-shot ImageBind
+    image_event_backend="zeroshot",
+    image_event_max_image_edge=1024,
+    top_k=5,
+)
+
+apd.compute_aq_similarity(
+    # audio_aq can be omitted; SoundAQnet is part of the core install
+    # image_aq can be omitted when event_aq_scores is provided; openSIP
+    # approximates image AQ from inferred image event ranks
+    event_aq_scores=event_aq_table,   # event -> AQ dimensions from the poster method
+    top_k=5,
+)
+```
+
+At the affective level, openSIP prefers direct AQ vectors when supplied. If
+`audio_aq` is omitted, it can infer audio affective quality with SoundAQnet.
+When direct AQ is unavailable, both audio AQ and image AQ can be approximated
+from event rankings using the poster's event-rank-to-AQ method and
+`event_aq_scores`.
+
+For imagery, users can also supply a PlacePulse-style predictor that scores
+`lively` and `boring`. openSIP maps those to image AQ `vibrant` and
+`monotonous`, so they can be compared with the same SoundAQnet dimensions:
+
+```python
+# Requires: pip install "openSIP[placepulse]"
+# Downloads lively.pth and boring.pth from
+# Jiani11/human-perception-place-pulse into ~/.cache/opensip/placepulse
+apd.compute_aq_similarity(
+    infer_image_placepulse=True,
+    aq_dimensions=["vibrant", "monotonous"],
+)
+```
+
+To use a custom PlacePulse implementation, pass `placepulse_predictor=` as a
+callable, `predict()`, or `predict_batch()` object.
+
+Street-view panoramas are handled before PlacePulse scoring. By default,
+`placepulse_panorama_strategy="auto"` detects wide 360-degree images, converts
+them to perspective crops at headings `[0, 90, 180, 270]`, scores each crop, and
+averages the lively/boring scores. Use `"none"` to score the image directly, or
+`"perspective"` to force crop-based scoring:
+
+```python
+apd.compute_aq_similarity(
+    infer_image_placepulse=True,
+    aq_dimensions=["vibrant", "monotonous"],
+    placepulse_panorama_strategy="perspective",
+    placepulse_panorama_headings=[0, 90, 180, 270],
+    placepulse_panorama_fov=90,
+)
+```
+
+Sound collection accumulates by default, so users can call
+`get_sound_from_location()` multiple times for different sources, distances, or
+filters. Duplicate recordings are removed after each call:
+
+```python
+apd.get_sound_from_location(source="aporee", bbox=BBOX)
+apd.get_sound_from_location(source="freesound", bbox=BBOX, key=FREESOUND_KEY)
+apd.get_sound_from_location(source="aporee", bbox=ANOTHER_BBOX)
+```
+
+When `bbox` is provided, the package filters sounds by the exact coordinate
+box. `distance` is only needed for point/location queries:
+
+```python
+apd.get_sound_from_location(source="aporee", distance=100)
+```
+
+Users can also pass a GeoPandas boundary instead of a rectangular bbox. The
+package queries the boundary bounds first, then keeps only sounds inside the
+actual polygon:
+
+```python
+import geopandas as gpd
+
+boundary = gpd.read_file("detroit_boundary.geojson")
+apd.get_sound_from_location(source="aporee", boundary=boundary)
+```
+
+Pass `reset=True` to discard previously collected sounds before a fresh fetch.
+
+Street-view collection behaves the same way: repeated
+`get_svi_from_locations()` calls append and deduplicate images, while
+`reset=True` starts a fresh SVI collection.
+
+Flickr photo collection can remove selfie/person-focused photos during
+collection:
+
+```python
+apd.get_photo_from_location(key=FLICKR_KEY, remove_selfies=True)
+```
+
+openSIP includes the same YuNet face detector used by urban-worm. Pass
+`selfie_model_path=...` only if you want to override the built-in model.
+
+As an optional cleanup step, `filter_outdoor()` removes audio recordings and/or
+Flickr photos whose coordinates fall inside building footprints. Street-view
+images are not filtered because they are captured from the road.
+
+Use Overture Maps for this step on city-scale or larger datasets. It streams
+building footprints through DuckDB with bounding-box pushdown, avoiding the
+Overpass timeouts that often happen with OpenStreetMap/OSM queries:
+
+```python
+apd.filter_outdoor(
+    data="both",                 # "audio", "photo", or "both"
+    building_source="overture",
+    overture_local="buildings_local.parquet",
+)
+```
+
+If you already have a small local building-footprint layer loaded in
+`apd.units`, you can filter against that instead:
+
+```python
+apd.filter_outdoor(data="both", building_source="loaded")
+```
+
+If you already have a populated `GeoTaggedData` object, the previous style still
+works:
+
+```python
+from opensip import AudioImagePairDataset, GeoTaggedData
+
+gtd = GeoTaggedData(locations=[[-83.073, 42.348]])
+apd = AudioImagePairDataset(gtd)
+```
+
+## Google Street View
+
+Use `source="google"` and pass a Google Street View Static API key, or set
+`GOOGLE_STREETVIEW_API_KEY` in the environment:
+
+```python
+from opensip import GeoTaggedData
+
+gtd = GeoTaggedData(locations=[[-83.073, 42.348]])
+
+gtd.get_svi_from_locations(
+    source="google",
+    key="YOUR_GOOGLE_STREETVIEW_API_KEY",
+    distance=50,
+    heading=None,   # faces the target location automatically
+    fov=80,
+    pitch=5,
+    height=500,
+    width=700,
+)
+```
+
+Google returns one image per location. The package stores the image as base64
+in `gtd.svis["data"]` and records Google metadata in `gtd.svi_metadata`.
